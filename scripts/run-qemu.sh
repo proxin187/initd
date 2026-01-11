@@ -4,7 +4,9 @@ set -e
 
 cargo build --release
 
+rm -f rootfs.cpio.gz
 rm -rf rootfs
+
 mkdir -p rootfs/{bin,sbin,etc,proc,sys,dev,run,tmp}
 mkdir -p rootfs/etc/initd/{boot,supervise,shutdown,disabled}
 

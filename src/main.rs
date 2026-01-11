@@ -46,7 +46,7 @@ fn main() {
             Ok(_) => println!("error: initd unexpectedly returned"),
         }
 
-        println!("critical: failed to exec emergency shell: {}", Command::new("/bin/sh").exec());
+        println!("critical: failed to exec emergency shell: {}", Command::new("/bin/dash").exec());
 
         loop {}
     } else {
