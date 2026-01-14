@@ -1,9 +1,9 @@
 # initd
 
-initd is a minimalist init system for linux, similar to runit it has 3 stages, the boot stage, the supervision stage and the shutdown stage.
+initd is a minimalist init system for linux, similar to runit it has 3 stages (a.k.a. runlevels), the boot stage, the supervision stage and the shutdown stage.
 
 ## Features
-- Emergency shell on unrecoverable errors, enabling manual recovery
+- Emergency shell on panic, enabling manual recovery
 
 ## Development
 To test initd during development you can either use the [automated script](scripts/run-qemu.sh) or follow the following steps:
