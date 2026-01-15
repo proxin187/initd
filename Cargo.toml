@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 inotify = "0.11.0"
+nix = { version = "0.30.1", features = ["process"] }
+signal-hook = "0.4.1"

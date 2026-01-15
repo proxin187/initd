@@ -4,6 +4,8 @@ pub mod shutdown;
 
 use crate::args::Args;
 
+use supervise::Superviser;
+
 
 pub fn init() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::new()?;
@@ -11,10 +13,19 @@ pub fn init() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("info: initd.services={}", services.display());
 
+    println!("info: enter boot stage");
+
     boot::boot(&services)?;
 
-    loop {
-    }
+    println!("info: enter supervise stage");
+
+    let mut superviser = Superviser::probe(&services)?;
+
+    superviser.supervise();
+
+    println!("info: enter shutdown stage");
+
+    Ok(())
 }
 
 
