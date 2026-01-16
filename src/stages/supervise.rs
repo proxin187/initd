@@ -1,15 +1,14 @@
 use crate::error::Error;
 
 use std::path::PathBuf;
-use std::process::{Command, Child};
+use std::process::Command;
 use std::os::unix::process::CommandExt;
-use std::collections::HashMap;
 use std::fs;
 use std::sync::atomic::{Ordering, AtomicUsize};
 use std::sync::Arc;
 
 use nix::unistd::{self, Pid};
-use nix::sys::wait;
+use nix::sys::{wait, signal};
 
 use signal_hook::{flag, consts};
 
@@ -20,63 +19,127 @@ const SIGNALS: [(i32, usize); 3] = [
     (consts::SIGUSR2, Signal::Update as usize)
 ];
 
+pub enum ShutdownMode {
+    Shutdown,
+    Reboot,
+}
+
+impl From<Signal> for ShutdownMode {
+    fn from(signal: Signal) -> ShutdownMode {
+        match signal {
+            Signal::Shutdown => ShutdownMode::Shutdown,
+            Signal::Reboot => ShutdownMode::Reboot,
+            _ => unreachable!(),
+        }
+    }
+}
+
 #[repr(usize)]
-enum Signal {
+pub enum Signal {
     Shutdown = 1,
     Reboot = 2,
     Update = 3,
+    Other,
 }
 
 impl Signal {
-    pub fn new(value: usize) -> Option<Signal> {
+    pub fn new(value: usize) -> Signal {
         match value {
-            1 => Some(Signal::Shutdown),
-            2 => Some(Signal::Reboot),
-            3 => Some(Signal::Update),
-            _ => None,
+            1 => Signal::Shutdown,
+            2 => Signal::Reboot,
+            3 => Signal::Update,
+            _ => Signal::Other,
         }
     }
 }
 
 pub struct Service {
+    pid: Pid,
     path: PathBuf,
-    child: Child,
 }
 
 impl Service {
-    pub fn new(path: PathBuf, child: Child) -> Service {
+    pub fn new(pid: Pid, path: PathBuf) -> Service {
         Service {
+            pid,
             path,
-            child,
+        }
+    }
+
+    pub fn kill(&self) {
+        println!("info: kill: {}", self.path.display());
+
+        if let Err(_) = signal::kill(self.pid, signal::SIGTERM) {
+            println!("error: unable to kill: {}", self.path.display());
+        }
+    }
+
+    pub fn wait(&self) {
+        println!("info: wait: {}", self.path.display());
+
+        if let Err(_) = wait::waitpid(self.pid, None) {
+            println!("error: unable to wait: {}", self.path.display());
         }
     }
 }
 
-#[derive(Default)]
-pub struct Superviser {
-    services: HashMap<Pid, Service>,
+pub struct Supervisor<'a> {
+    services: Vec<Service>,
+    path: &'a PathBuf,
 }
 
-impl Superviser {
-    pub fn probe(path: &PathBuf) -> Result<Superviser, Box<dyn std::error::Error>> {
-        let mut superviser = Superviser::default();
-
-        for entry in fs::read_dir(path.join("services")).map_err(|_| Error::InvalidServiceDirectory)?.filter_map(|entry| entry.ok()) {
-            superviser.spawn(entry.path());
-        }
-
-        Ok(superviser)
-    }
-
-    pub fn spawn(&mut self, path: PathBuf) {
-        println!("info: start {}", path.display());
-
-        if let Ok(child) = unsafe { Command::new(path.join("supervise")).pre_exec(|| { let _ = unistd::setsid(); Ok(()) }).spawn() } {
-            self.services.insert(Pid::from_raw(child.id() as i32), Service::new(path, child));
+impl<'a> Supervisor<'a> {
+    pub fn new(path: &'a PathBuf) -> Supervisor<'a> {
+        Supervisor {
+            services: Vec::new(),
+            path,
         }
     }
 
-    pub fn supervise(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn update(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        println!("info: update: {}", self.path.display());
+
+        let dir = fs::read_dir(self.path.join("services"))
+            .map_err(|_| Error::InvalidServiceDirectory)?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .collect::<Vec<PathBuf>>();
+
+        self.services.retain(|service| {
+            dir.contains(&service.path) || {
+                service.kill();
+                false
+            }
+        });
+
+        for path in dir {
+            if !self.services.iter().any(|service| service.path == path) {
+                self.spawn(&path);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn spawn(&mut self, path: &PathBuf) {
+        println!("info: start: {}", path.display());
+
+        match unsafe { Command::new(path).pre_exec(|| { let _ = unistd::setsid(); Ok(()) }).spawn() } {
+            Ok(child) => self.services.push(Service::new(Pid::from_raw(child.id() as i32), path.clone())),
+            Err(err) => println!("error: {}: {}", path.display(), err),
+        }
+    }
+
+    pub fn shutdown(&self) {
+        for service in self.services.iter() {
+            service.kill();
+        }
+
+        for service in self.services.iter() {
+            service.wait();
+        }
+    }
+
+    pub fn supervise(&mut self) -> Result<ShutdownMode, Box<dyn std::error::Error>> {
         let signal = Arc::new(AtomicUsize::new(0));
 
         for (hook, value) in SIGNALS {
@@ -85,22 +148,24 @@ impl Superviser {
 
         loop {
             if let Some(pid) = wait::waitpid(Pid::from_raw(-1), None).ok().and_then(|status| status.pid()) {
-                if let Some(service) = self.services.remove(&pid) {
+                if let Some(index) = self.services.iter().position(|service| service.pid == pid) {
+                    let service = self.services.remove(index);
+
                     println!("warn: {}: exited unexpectedly", service.path.display());
 
-                    self.spawn(service.path);
+                    self.spawn(&service.path);
                 }
             } else {
-                // TODO: use other enum instead
-                match Signal::new(signal.load(Ordering::Relaxed)) {
-                    Some(Signal::Shutdown) => {
+                let signal = Signal::new(signal.load(Ordering::Relaxed));
+
+                match signal {
+                    Signal::Shutdown | Signal::Reboot => {
+                        self.shutdown();
+
+                        return Ok(ShutdownMode::from(signal));
                     },
-                    Some(Signal::Reboot) => {
-                    },
-                    Some(Signal::Update) => {
-                    },
-                    None => {
-                    },
+                    Signal::Update => self.update()?,
+                    Signal::Other => println!("warn: ignoring invalid signal"),
                 }
             }
         }

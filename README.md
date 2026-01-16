@@ -3,6 +3,7 @@
 initd is a minimalist init system for linux, similar to runit it has 3 stages (a.k.a. runlevels), the boot stage, the supervision stage and the shutdown stage.
 
 ## Features
+- Services are simple shell scripts - want separate run/finish logic? write a wrapper script
 - Emergency shell on panic, enabling manual recovery
 
 ## Development
