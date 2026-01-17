@@ -1,10 +1,11 @@
-pub mod boot;
 pub mod supervise;
-pub mod shutdown;
+pub mod script;
 
 use crate::args::Args;
 
 use supervise::Supervisor;
+
+use nix::sys::reboot;
 
 
 pub fn init() -> Result<(), Box<dyn std::error::Error>> {
@@ -15,7 +16,7 @@ pub fn init() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("info: enter boot stage");
 
-    boot::boot(&services)?;
+    script::run_dir(services.join("boot"), "start")?;
 
     println!("info: enter supervise stage");
 
@@ -26,6 +27,10 @@ pub fn init() -> Result<(), Box<dyn std::error::Error>> {
     let mode = supervisor.supervise()?;
 
     println!("info: enter shutdown stage");
+
+    script::run_dir(services.join("shutdown"), "shutdown")?;
+
+    let _ = reboot::reboot(mode);
 
     Ok(())
 }

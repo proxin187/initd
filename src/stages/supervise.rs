@@ -7,6 +7,7 @@ use std::fs;
 use std::sync::atomic::{Ordering, AtomicUsize};
 use std::sync::Arc;
 
+use nix::sys::reboot::RebootMode;
 use nix::unistd::{self, Pid};
 use nix::sys::{wait, signal};
 
@@ -18,21 +19,6 @@ const SIGNALS: [(i32, usize); 3] = [
     (consts::SIGUSR1, Signal::Reboot as usize),
     (consts::SIGUSR2, Signal::Update as usize)
 ];
-
-pub enum ShutdownMode {
-    Shutdown,
-    Reboot,
-}
-
-impl From<Signal> for ShutdownMode {
-    fn from(signal: Signal) -> ShutdownMode {
-        match signal {
-            Signal::Shutdown => ShutdownMode::Shutdown,
-            Signal::Reboot => ShutdownMode::Reboot,
-            _ => unreachable!(),
-        }
-    }
-}
 
 #[repr(usize)]
 pub enum Signal {
@@ -49,6 +35,14 @@ impl Signal {
             2 => Signal::Reboot,
             3 => Signal::Update,
             _ => Signal::Other,
+        }
+    }
+
+    pub fn reboot_mode(&self) -> RebootMode {
+        match self {
+            Signal::Shutdown => RebootMode::RB_POWER_OFF,
+            Signal::Reboot => RebootMode::RB_AUTOBOOT,
+            _ => unreachable!(),
         }
     }
 }
@@ -139,7 +133,7 @@ impl<'a> Supervisor<'a> {
         }
     }
 
-    pub fn supervise(&mut self) -> Result<ShutdownMode, Box<dyn std::error::Error>> {
+    pub fn supervise(&mut self) -> Result<RebootMode, Box<dyn std::error::Error>> {
         let signal = Arc::new(AtomicUsize::new(0));
 
         for (hook, value) in SIGNALS {
@@ -162,7 +156,7 @@ impl<'a> Supervisor<'a> {
                     Signal::Shutdown | Signal::Reboot => {
                         self.shutdown();
 
-                        return Ok(ShutdownMode::from(signal));
+                        return Ok(signal.reboot_mode());
                     },
                     Signal::Update => self.update()?,
                     Signal::Other => println!("warn: ignoring invalid signal"),
